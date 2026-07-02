@@ -1,0 +1,723 @@
+"""
+Module to set up run time parameters for Clawpack.
+
+The values set in the function setrun are then written out to data files
+that will be read in by the Fortran code.
+
+"""
+
+from __future__ import absolute_import
+from __future__ import print_function
+import os
+import numpy as np
+from clawpack.geoclaw import fgmax_tools
+from clawpack.amrclaw.data import FlagRegion
+try:
+    CLAW = os.environ['CLAW']
+except:
+    raise Exception("*** Must first set CLAW enviornment variable")
+
+# Scratch directory for storing topo and dtopo files:
+scratch_dir = os.path.join(CLAW, 'geoclaw', 'scratch')
+
+
+#------------------------------
+def setrun(claw_pkg='geoclaw'):
+#------------------------------
+
+    """
+    Define the parameters used for running Clawpack.
+
+    INPUT:
+        claw_pkg expected to be "geoclaw" for this setrun.
+
+    OUTPUT:
+        rundata - object of class ClawRunData
+
+    """
+
+    from clawpack.clawutil import data
+
+    assert claw_pkg.lower() == 'geoclaw',  "Expected claw_pkg = 'geoclaw'"
+
+    num_dim = 2
+    rundata = data.ClawRunData(claw_pkg, num_dim)
+
+
+    #------------------------------------------------------------------
+    # Problem-specific parameters to be written to setprob.data:
+    #------------------------------------------------------------------
+    
+    #probdata = rundata.new_UserData(name='probdata',fname='setprob.data')
+
+
+    #------------------------------------------------------------------
+    # GeoClaw specific parameters:
+    #------------------------------------------------------------------
+    rundata = setgeo(rundata)
+
+    #------------------------------------------------------------------
+    # Standard Clawpack parameters to be written to claw.data:
+    #   (or to amr2ez.data for AMR)
+    #------------------------------------------------------------------
+    clawdata = rundata.clawdata  # initialized when rundata instantiated
+
+
+    # Set single grid parameters first.
+    # See below for AMR parameters.
+
+
+    # ---------------
+    # Spatial domain:
+    # ---------------
+
+    # Number of space dimensions:
+    clawdata.num_dim = num_dim
+    # Lower and upper edge of computational domain:
+    clawdata.lower[0] = -132      # west longitude
+    clawdata.upper[0] = -122       # east longitude
+
+    clawdata.lower[1] = 37       # south latitude
+    clawdata.upper[1] = 52         # north latitude
+
+
+
+    # Number of grid cells: Coarsest grid
+    clawdata.num_cells[0] = int(10*12)
+    clawdata.num_cells[1] = int(15*12)
+
+    # ---------------
+    # Size of system:
+    # ---------------
+
+    # Number of equations in the system:
+    clawdata.num_eqn = 3
+
+    # Number of auxiliary variables in the aux array (initialized in setaux)
+    clawdata.num_aux = 3
+
+    # Index of aux array corresponding to capacity function, if there is one:
+    clawdata.capa_index = 2
+
+    
+    
+    # -------------
+    # Initial time:
+    # -------------
+
+    clawdata.t0 = 0.0
+
+
+    # Restart from checkpoint file of a previous run?
+    # If restarting, t0 above should be from original run, and the
+    # restart_file 'fort.chkNNNNN' specified below should be in 
+    # the OUTDIR indicated in Makefile.
+
+    clawdata.restart = False              # True to restart from prior results
+    clawdata.restart_file = 'fort.chk00096'  # File to use for restart data
+
+    # -------------
+    # Output times:
+    #--------------
+
+    # Specify at what times the results should be written to fort.q files.
+    # Note that the time integration stops after the final output time.
+    # The solution at initial time t0 is always written in addition.
+
+    clawdata.output_style = 1
+
+    if clawdata.output_style==1:
+        # Output nout frames at equally spaced times up to tfinal:
+        clawdata.num_output_times = 2
+        clawdata.tfinal =4*3600.
+        clawdata.output_t0 = True  # output at initial (or restart) time?
+
+    elif clawdata.output_style == 2:
+        # Specify a list of output times.
+        clawdata.output_times = [0.5, 1.0]
+
+    elif clawdata.output_style == 3:
+        # Output every iout timesteps with a total of ntot time steps:
+        clawdata.output_step_interval = 1
+        clawdata.total_steps = 3
+        clawdata.output_t0 = True
+        
+
+    clawdata.output_format = 'binary'      # 'ascii' or 'binary' 
+
+    clawdata.output_q_components = 'all'   # need all
+    clawdata.output_aux_components = 'none'  # eta=h+B is in q
+    clawdata.output_aux_onlyonce = False    # output aux arrays each frame
+
+
+
+    # ---------------------------------------------------
+    # Verbosity of messages to screen during integration:
+    # ---------------------------------------------------
+
+    # The current t, dt, and cfl will be printed every time step
+    # at AMR levels <= verbosity.  Set verbosity = 0 for no printing.
+    #   (E.g. verbosity == 2 means print only on levels 1 and 2.)
+    clawdata.verbosity = 1
+
+
+
+    # --------------
+    # Time stepping:
+    # --------------
+
+    # if dt_variable==1: variable time steps used based on cfl_desired,
+    # if dt_variable==0: fixed time steps dt = dt_initial will always be used.
+    clawdata.dt_variable = True
+
+    # Initial time step for variable dt.
+    # If dt_variable==0 then dt=dt_initial for all steps:
+    clawdata.dt_initial = 0.2
+
+    # Max time step to be allowed if variable dt used:
+    clawdata.dt_max = 1e+99
+
+    # Desired Courant number if variable dt used, and max to allow without
+    # retaking step with a smaller dt:
+    clawdata.cfl_desired = 0.75
+    clawdata.cfl_max = 1.0
+
+    # Maximum number of time steps to allow between output times:
+    clawdata.steps_max = 5000
+
+
+
+
+    # ------------------
+    # Method to be used:
+    # ------------------
+
+    # Order of accuracy:  1 => Godunov,  2 => Lax-Wendroff plus limiters
+    clawdata.order = 2
+    
+    # Use dimensional splitting? (not yet available for AMR)
+    clawdata.dimensional_split = 'unsplit'
+    
+    # For unsplit method, transverse_waves can be 
+    #  0 or 'none'      ==> donor cell (only normal solver used)
+    #  1 or 'increment' ==> corner transport of waves
+    #  2 or 'all'       ==> corner transport of 2nd order corrections too
+    clawdata.transverse_waves = 2
+
+    # Number of waves in the Riemann solution:
+    clawdata.num_waves = 3
+    
+    # List of limiters to use for each wave family:  
+    # Required:  len(limiter) == num_waves
+    # Some options:
+    #   0 or 'none'     ==> no limiter (Lax-Wendroff)
+    #   1 or 'minmod'   ==> minmod
+    #   2 or 'superbee' ==> superbee
+    #   3 or 'mc'       ==> MC limiter
+    #   4 or 'vanleer'  ==> van Leer
+    clawdata.limiter = ['mc', 'mc', 'mc']
+
+    clawdata.use_fwaves = True    # True ==> use f-wave version of algorithms
+    
+    # Source terms splitting:
+    #   src_split == 0 or 'none'    ==> no source term (src routine never called)
+    #   src_split == 1 or 'godunov' ==> Godunov (1st order) splitting used, 
+    #   src_split == 2 or 'strang'  ==> Strang (2nd order) splitting used,  not recommended.
+    clawdata.source_split = 'godunov'
+
+
+    # --------------------
+    # Boundary conditions:
+    # --------------------
+
+    # Number of ghost cells (usually 2)
+    clawdata.num_ghost = 2
+
+    # Choice of BCs at xlower and xupper:
+    #   0 => user specified (must modify bcN.f to use this option)
+    #   1 => extrapolation (non-reflecting outflow)
+    #   2 => periodic (must specify this at both boundaries)
+    #   3 => solid wall for systems where q(2) is normal velocity
+
+    clawdata.bc_lower[0] = 'extrap'
+    clawdata.bc_upper[0] = 'extrap'
+
+    clawdata.bc_lower[1] = 'extrap'
+    clawdata.bc_upper[1] = 'extrap'
+
+
+
+    # --------------
+    # Checkpointing:
+    # --------------
+
+    # Specify when checkpoint files should be created that can be
+    # used to restart a computation.
+
+    clawdata.checkpt_style = 0
+
+    if clawdata.checkpt_style == 0:
+        # Do not checkpoint at all
+        pass
+
+    elif np.abs(clawdata.checkpt_style) == 1:
+        # Checkpoint only at tfinal.
+        pass
+
+    elif np.abs(clawdata.checkpt_style) == 2:
+        # Specify a list of checkpoint times.  
+        clawdata.checkpt_times = [0.1,0.15]
+
+    elif np.abs(clawdata.checkpt_style) == 3:
+        # Checkpoint every checkpt_interval timesteps (on Level 1)
+        # and at the final time.
+        clawdata.checkpt_interval = 5
+
+
+    # ---------------
+    # AMR parameters:
+    # ---------------
+    amrdata = rundata.amrdata
+
+    # maximum size of patches in each direction (matters in parallel):
+    amrdata.max1d = 60
+
+    # max number of refinement levels:
+    amrdata.amr_levels_max = 4
+
+    # List of refinement ratios at each level (length at least mxnest-1)
+    amrdata.refinement_ratios_x = [5,4,5]
+    amrdata.refinement_ratios_y = [5,4,5]
+    amrdata.refinement_ratios_t = [5,4,5]
+
+
+    # Specify type of each aux variable in amrdata.auxtype.
+    # This must be a list of length maux, each element of which is one of:
+    #   'center',  'capacity', 'xleft', or 'yleft'  (see documentation).
+
+    amrdata.aux_type = ['center','capacity','yleft']
+
+
+    # Flag using refinement routine flag2refine rather than richardson error
+    amrdata.flag_richardson = False    # use Richardson?
+    amrdata.flag_richardson_tol = 0.002  # Richardson tolerance
+    amrdata.flag2refine = True
+
+    # steps to take on each level L between regriddings of level L+1:
+    amrdata.regrid_interval = 3
+
+    # width of buffer zone around flagged points:
+    # (typically the same as regrid_interval so waves don't escape):
+    amrdata.regrid_buffer_width  = 2
+
+    # clustering alg. cutoff for (# flagged pts) / (total # of cells refined)
+    # (closer to 1.0 => more small grids may be needed to cover flagged cells)
+    amrdata.clustering_cutoff = 0.700000
+
+    # print info about each regridding up to this level:
+    amrdata.verbosity_regrid = 0  
+
+    #  ----- For developers ----- 
+    # Toggle debugging print statements:
+    amrdata.dprint = False      # print domain flags
+    amrdata.eprint = False      # print err est flags
+    amrdata.edebug = False      # even more err est flags
+    amrdata.gprint = False      # grid bisection/clustering
+    amrdata.nprint = False      # proper nesting output
+    amrdata.pprint = False      # proj. of tagged points
+    amrdata.rprint = False      # print regridding summary
+    amrdata.sprint = False      # space/memory output
+    amrdata.tprint = True       # time step reporting each level
+    amrdata.uprint = False      # update/upbnd reporting
+    
+    # More AMR parameters can be set -- see the defaults in pyclaw/data.py
+
+    # ---------------
+    # Regions:
+    # ---------------
+    rundata.regiondata.regions = []
+    rundata.gaugedata.gauges = []
+    # read gauges file for PTHA gauges
+    gauges = np.genfromtxt('/home/ssantellanes/Tsunami/Cascadia/cascadia_1km_og.pts')
+
+  # Loop over gauges
+    rundata.gaugedata.gauges = []
+    dx = 0.01 # area covered by each gauges bathy
+    gauge_id=0
+    for kgauge in range(len(gauges)):
+
+    # Add individual gauge 
+      x = gauges[kgauge,0]
+      y = gauges[kgauge,1]
+
+
+      geoclaw_id = gauge_id+kgauge
+      rundata.gaugedata.gauges.append([geoclaw_id,x,y,300, 1.e10])
+      rundata.gaugedata.aux_out_fields = 'all'
+    # to specify regions of refinement append lines of the form
+    #  [minlevel,maxlevel,t1,t2,x1,x2,y1,y2]
+    
+    
+    rundata.regiondata.regions.append([3,4,300,1.e10,x-dx,x+dx,y-dx,y+dx])
+    # ---------------
+    # Gauges:
+    # ---------------
+   
+    #----------------
+    # Flag Regions:
+    #----------------
+
+    flagregions=rundata.flagregiondata.flagregions
+    RRdir='/home/ssantellanes/Tsunami/Cascadia/polygons'
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'Region_domain'
+    flagregion.minlevel = 1
+    flagregion.maxlevel = 3
+    flagregion.t1 = 0.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 1  # Rectangle
+    flagregion.spatial_region = [clawdata.lower[0],
+                                 clawdata.upper[0],
+                                 clawdata.lower[1],
+                                 clawdata.upper[1]]
+    flagregions.append(flagregion)
+    # Continential shelf Variable Region - 3min to 90sec:
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'casc_north'
+    flagregion.minlevel = 3
+    flagregion.maxlevel = 4
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_ORWA_Domain.data'
+    flagregions.append(flagregion)
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'casc_orca'
+    flagregion.minlevel = 3
+    flagregion.maxlevel = 4
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_ORCA_Domain.data'
+    """
+    flagregions.append(flagregion)
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'ocean_shores'
+    flagregion.minlevel = 4
+    flagregion.maxlevel = 5
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_OS13_Domain.data'
+    flagregions.append(flagregion)
+    """
+    """     
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'long_beach'
+    flagregion.minlevel = 4
+    flagregion.maxlevel = 4
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_Coast_Long_Beach.data'
+    flagregions.append(flagregion) 
+    """
+    """         
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'seaside'
+    flagregion.minlevel = 4
+    flagregion.maxlevel = 4
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_Coast_Seaside.data'
+    flagregions.append(flagregion)
+    """
+    """
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'newport'
+    flagregion.minlevel = 4
+    flagregion.maxlevel = 5
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_NEW13_Domain.data'
+    flagregions.append(flagregion)
+    """
+    """
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'gold_beach'
+    flagregion.minlevel = 4
+    flagregion.maxlevel = 4
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_Coast_Gold_Beach.data'
+    flagregions.append(flagregion)
+    """
+    """
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'crescent_city'
+    flagregion.minlevel = 4
+    flagregion.maxlevel = 5
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_CC13_Domain.data'
+    flagregions.append(flagregion)
+    """
+    """
+    flagregion = FlagRegion(num_dim=2)
+    flagregion.name = 'eureka'
+    flagregion.minlevel = 4
+    flagregion.maxlevel = 4
+    flagregion.t1 = 0.*3600.
+    flagregion.t2 = 1e9
+    flagregion.spatial_region_type = 2  # Ruled Rectangle
+    flagregion.spatial_region_file = RRdir + \
+            '/RuledRectangle_Coast_Eureka.data'
+    flagregions.append(flagregion)
+    """
+    return rundata
+    # end of function setrun
+    # ----------------------
+
+
+#-------------------
+def setgeo(rundata):
+#-------------------
+    """
+    Set GeoClaw specific runtime parameters.
+    For documentation see ....
+    """
+
+    try:
+        geo_data = rundata.geo_data
+    except:
+        print("*** Error, this rundata has no geo_data attribute")
+        raise AttributeError("Missing geo_data attribute")
+       
+    # == Physics ==
+    geo_data.gravity = 9.81
+    geo_data.coordinate_system = 2
+    geo_data.earth_radius = 6367.5e3
+
+    # == Forcing Options
+    geo_data.coriolis_forcing = False
+
+    # == Algorithm and Initial Conditions ==
+    geo_data.sea_level = 0.0
+    geo_data.dry_tolerance = 1.e-3
+    geo_data.friction_forcing = True
+    geo_data.manning_coefficient =[0.025,0.03,0.04]
+    geo_data.manning_break = [0.0,3.0]
+    geo_data.friction_depth = 1e6
+
+    # Refinement settings
+    refinement_data = rundata.refinement_data
+    refinement_data.variable_dt_refinement_ratios = True
+    refinement_data.wave_tolerance = 1.e-1
+    refinement_data.deep_depth = 1e2
+    refinement_data.max_level_deep = 2
+
+    # == settopo.data values ==
+    topo_data = rundata.topo_data
+    # for topography, append lines of the form
+    #    [topotype, minlevel, maxlevel, t1, t2, fname]
+#    topo_path = '/home/ssantellanes/Tsunami/Extended_Mega_Inversion/sandpoint_sean.topo'
+    topo_path='/home/ssantellanes/Tsunami/Cascadia/ptha.topo'
+    #topo_path_3s='3s_orca.topo'
+    #topo_path_orwa='3s_orwa.topo'
+    topo_path_np='/hdd/ssantellanes/topofiles/np13.topo'
+    #topo_path_eure='3s_eureka.topo'
+    topo_path_casc_north='/hdd/ssantellanes/topofiles/casc_north_3s.topo'
+    topo_path_casc_south='/hdd/ssantellanes/topofiles/casc_south_3s.topo'
+    topo_path_cc='/hdd/ssantellanes/topofiles/cc_may.topo'
+    topo_path_oc='/hdd/ssantellanes/topofiles/os13.topo'
+    topo_data.topofiles.append([3, 1, 3, 0., 1.e10, topo_path])
+    topo_data.topofiles.append([3, 3, 4, 0., 1.e10, topo_path_casc_north])
+    topo_data.topofiles.append([3, 3, 4, 0., 1.e10, topo_path_casc_south])
+    #topo_data.topofiles.append([3,4,4,0.,1.e10,topo_path_3s])
+    #topo_data.topofiles.append([3,4,4,0.,1.e10,topo_path_orwa])
+    #topo_data.topofiles.append([3,4,4,0.,1.e10,topo_path_eure])
+    #topo_data.topofiles.append([3,5,5,0.,1.e10,topo_path_oc])
+    #topo_data.topofiles.append([3,5,5,0.,1.e10,topo_path_np])
+    #topo_data.topofiles.append([3,5,5,0.,1.e10,topo_path_cc])
+    # == setdtopo.data values ==
+    dtopo_data = rundata.dtopo_data
+    # for moving topography, append lines of the form :   (<= 1 allowed for now!)
+    #   [topotype, minlevel,maxlevel,fname]
+    #dtopo_path = '/home/ssantellanes/Tsunami/Sand_Point_2020/jan2.0007.dtopo'
+    #dtopo_path='cascadia1700_gamma.003368.dtopo'
+    #dtopo_path='CSZ_XXL1-uw.tt3'
+    #dtopo_data.dtopofiles.append([1,3,3,dtopo_path])
+    dtopo_data.dtopofiles.append([1,3,3,'dtopo_GF'])
+    dtopo_data.dt_max_dtopo = 0.2
+
+
+    # == setqinit.data values ==
+    rundata.qinit_data.qinit_type = 0
+    rundata.qinit_data.qinitfiles = []
+    # for qinit perturbations, append lines of the form: (<= 1 allowed for now!)
+    #   [minlev, maxlev, fname]
+        # variable_eta_init newly added to QinitData:
+    rundata.qinit_data.variable_eta_init = True
+    # == setfixedgrids.data values ==
+    fixed_grids = rundata.fixed_grid_data
+    # for fixed grids append lines of the form
+    # [t1,t2,noutput,x1,x2,y1,y2,xpoints,ypoints,\
+    #  ioutarrivaltimes,ioutsurfacemax]
+   # == fgmax_grids.data values ==
+    # NEW STYLE STARTING IN v5.7.0
+
+    # set num_fgmax_val = 1 to save only max depth,
+    #                     2 to also save max speed,
+    #                     5 to also save max hs,hss,hmin
+    rundata.fgmax_data.num_fgmax_val = 1
+
+    fgmax_grids = rundata.fgmax_data.fgmax_grids  # empty list to start
+
+    # Now append to this list objects of class fgmax_tools.FGmaxGrid
+    # specifying any fgmax grids.
+
+    ## CC wave from CSZ_XL1 gets to CC before 20 minutes. Some of
+    ## Amys sources might get there much earlier also.  Just turn
+    ## on at time 120sec after finestgrid turned on to be safe. 
+    ## B will be on the fgmax region, which is used by Randy to calculate
+    ## the initial B0 by (B=B0+dB, or B0 = B -dB) so he needs the
+    ## fgmax values to be after the finest grid has been turned on. We
+    ## are turning on our finest region here at time tstart_finestgrid, so
+    ## turn on the fgmax storage 120 seconds later after all subsidence has
+    ## been done.
+
+    amrdata = rundata.amrdata
+    # Points on a nonuniform points:
+    """
+    fg = fgmax_tools.FGmaxGrid()
+    fg.point_style = 4  # nonuniform points not grid
+
+
+    fg.xy_fname = '/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_os13_may.data'
+#    fg.xy_file = '/hdd/tsunami_models/japan/fg_inun.pts'
+    fg.min_level_check = amrdata.amr_levels_max # which levels to monitor max on
+    fg.tstart_max = 300.  # just before wave arrives
+    fg.tend_max = 1.e10    # when to stop monitoring max values
+    fg.dt_check = 20.      # how often to update max values
+    fg.interp_method = 0   # 0 ==> pw const in cells, recommended
+    rundata.fgmax_data.fgmax_grids.append(fg)  # written to fgmax_grids.data
+    fg = fgmax_tools.FGmaxGrid()
+    fg.point_style = 4  # nonuniform points not grid
+    """
+
+    """
+    fg.xy_fname = '/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_long_beach.data'
+#    fg.xy_file = '/hdd/tsunami_models/japan/fg_inun.pts'
+    fg.min_level_check = amrdata.amr_levels_max # which levels to monitor max on
+    fg.tstart_max = 300.  # just before wave arrives
+    fg.tend_max = 1.e10    # when to stop monitoring max values
+    fg.dt_check = 20.      # how often to update max values
+    fg.interp_method = 0   # 0 ==> pw const in cells, recommended
+    rundata.fgmax_data.fgmax_grids.append(fg)  # written to fgmax_grids.data
+    """
+    """
+    fg = fgmax_tools.FGmaxGrid()
+
+    #pts = np.genfromtxt('/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_seaside.data',skip_header=6)
+    fg.point_style = 4  # nonuniform points not grid
+
+
+    fg.xy_fname = '/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_seaside.data'
+#    fg.xy_file = '/hdd/tsunami_models/japan/fg_inun.pts'
+    fg.min_level_check = amrdata.amr_levels_max # which levels to monitor max on
+    fg.tstart_max = 300.  # just before wave arrives
+    fg.tend_max = 1.e10    # when to stop monitoring max values
+    fg.dt_check = 20.      # how often to update max values
+    fg.interp_method = 0   # 0 ==> pw const in cells, recommended
+    rundata.fgmax_data.fgmax_grids.append(fg)  # written to fgmax_grids.dat
+    """
+    """
+    fg = fgmax_tools.FGmaxGrid()
+
+    #pts = np.genfromtxt('/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_np13.data',skip_header=6)
+    fg.point_style = 4  # nonuniform points not grid
+
+
+    fg.xy_fname = '/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_np13_may.data'
+#    fg.xy_file = '/hdd/tsunami_models/japan/fg_inun.pts'
+    fg.min_level_check = amrdata.amr_levels_max # which levels to monitor max on
+    fg.tstart_max = 300.  # just before wave arrives
+    fg.tend_max = 1.e10    # when to stop monitoring max values
+    fg.dt_check = 20.      # how often to update max values
+    fg.interp_method = 0   # 0 ==> pw const in cells, recommended
+    rundata.fgmax_data.fgmax_grids.append(fg)  # written to fgmax_grids.dat
+    """
+    """
+    fg = fgmax_tools.FGmaxGrid()
+
+    #pts = np.genfromtxt('/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_gold_beach.data',skip_header=6)
+    fg.point_style = 4  # nonuniform points not grid
+
+
+    fg.xy_fname = '/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_gold_beach.data'
+#    fg.xy_file = '/hdd/tsunami_models/japan/fg_inun.pts'
+    fg.min_level_check = amrdata.amr_levels_max # which levels to monitor max on
+    fg.tstart_max = 300.  # just before wave arrives
+    fg.tend_max = 1.e10    # when to stop monitoring max values
+    fg.dt_check = 20.      # how often to update max values
+    fg.interp_method = 0   # 0 ==> pw const in cells, recommended
+    rundata.fgmax_data.fgmax_grids.append(fg)  # written to fgmax_grids.dat
+    """
+    """
+    fg = fgmax_tools.FGmaxGrid()
+
+    #pts = np.genfromtxt('/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_cc13.data',skip_header=6)
+    fg.point_style = 4  # nonuniform points not grid
+
+
+    fg.xy_fname = '/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_cc13_may.data'
+#    fg.xy_file = '/hdd/tsunami_models/japan/fg_inun.pts'
+    fg.min_level_check = amrdata.amr_levels_max # which levels to monitor max on
+    fg.tstart_max = 300.  # just before wave arrives
+    fg.tend_max = 1.e10    # when to stop monitoring max values
+    fg.dt_check = 20.      # how often to update max values
+    fg.interp_method = 0   # 0 ==> pw const in cells, recommended
+    rundata.fgmax_data.fgmax_grids.append(fg)  # written to fgmax_grids.dat
+    """
+    """
+    fg = fgmax_tools.FGmaxGrid()
+
+    #pts = np.genfromtxt('/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_eureka.data',skip_header=6)
+    fg.point_style = 4  # nonuniform points not grid
+
+
+    fg.xy_fname = '/home/ssantellanes/Tsunami/Cascadia/fg_points/fgmax_pts_topostyle_eureka.data'
+#    fg.xy_file = '/hdd/tsunami_models/japan/fg_inun.pts'
+    fg.min_level_check = amrdata.amr_levels_max # which levels to monitor max on
+    fg.tstart_max = 300.  # just before wave arrives
+    fg.tend_max = 1.e10    # when to stop monitoring max values
+    fg.dt_check = 20.      # how often to update max values
+    fg.interp_method = 0   # 0 ==> pw const in cells, recommended
+    rundata.fgmax_data.fgmax_grids.append(fg)  # written to fgmax_grids.dat
+    """
+    return rundata
+    # end of function setgeo
+    # ----------------------
+
+
+
+if __name__ == '__main__':
+    # Set up run-time parameters and write all data files.
+    import sys
+    from clawpack.geoclaw import kmltools
+
+    rundata = setrun(*sys.argv[1:])
+    rundata.write()
+
