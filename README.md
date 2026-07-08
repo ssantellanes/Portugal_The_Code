@@ -1,7 +1,7 @@
 # PORTable Uniform Geophysical AnaLysis (PORTUGAL) Code(s)
 
 ## Not for production use
-![Portugal the map](portugal_the_map.png)
+![Portugal the map](IMG_5431_Original.jpg)
 
 ## Help, how do I download the code requirements!?
 
