@@ -10,3 +10,5 @@ Por primera vez, estás creando la fila como esta:
 
 Entonces,
 * conda env create -f <env_name>.yml
+## COSMIC Selector
+Data assimilation in Julia of the Bi-Gaussian Ensemble Kalman Filter (BGEnFK) for use in the COseismic Statistics MIxing Codes (COSMIC).
