@@ -19,14 +19,14 @@
 module lasso
 export NormArray, CosmicSelector
 using LinearAlgebra
-function get_norm(x,y)
+function get_norm(x::Matrix,y::Matrix)
     #Construct a vector of differences
     z=x.-y #Element-wise differenincing
     return norm(z,2)
 end
-function NormArray(A,B)
-    nr=size(A,1)
-    normarray=zeros(nr)
+function NormArray(A::Array,B::Array)
+    nr=size(A,1)#Size of ensemble grouping
+    normarray=zeros(nr)#Norm array to be the size of the ensemble grouping
     for i=1:nr
         x=B[1,:,:]
         y=A[i,:,:] #Yes, this could be written better. I do not care.
@@ -34,7 +34,9 @@ function NormArray(A,B)
     end
     return normarray
 end
-function CosmicSelector(η)
+function CosmicSelector(η::Vector)
+    # For bi-Gaussian need 25 events per kernal
+    # There are two kernals for 50 total ensemble
     top_events=zeros(25,2)
     for i=1:25
         info_event=findmin(η)
