@@ -9,10 +9,6 @@
                              .
          *          .   *
 ------------------------------------------------
-Thank you for visiting https://asciiart.website/
-This ASCII pic can be found at
-https://asciiart.website/art/2536
-
 COseismic slip Statistic MIxing Codes (COSMIC)
 An implementation of Joseph Chan's (The Ohio State University) Bi-Gaussian Ensemble Kalman Filter (BGEnKF)
 for use in tsunami modelling.
